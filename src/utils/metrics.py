@@ -79,6 +79,65 @@ def average_mAP(
     return float(np.mean(list(per_attribute_mAP(probs, targets).values())))
 
 
+def per_attribute_accuracy(
+    preds: Mapping[str, np.ndarray],
+    targets: Mapping[str, np.ndarray],
+) -> dict[str, float]:
+    """Top-1 accuracy for each attribute."""
+    return {
+        a: float(np.mean(np.asarray(preds[a]) == np.asarray(targets[a])))
+        for a in ATTRIBUTES
+    }
+
+
+def per_class_accuracy(
+    preds: Mapping[str, np.ndarray],
+    targets: Mapping[str, np.ndarray],
+) -> dict[str, dict]:
+    """Per-class recall, reported as class accuracy in the assignment."""
+    out = {}
+    for a in ATTRIBUTES:
+        class_scores = []
+        supports = []
+        for class_index in range(NUM_CLASSES[a]):
+            mask = np.asarray(targets[a]) == class_index
+            support = int(mask.sum())
+            supports.append(support)
+            class_scores.append(
+                float(np.mean(np.asarray(preds[a])[mask] == class_index))
+                if support > 0 else float("nan")
+            )
+        out[a] = {
+            "class": CLASS_NAMES[a],
+            "accuracy": class_scores,
+            "support": supports,
+        }
+    return out
+
+
+def worst_class_accuracy(
+    preds: Mapping[str, np.ndarray],
+    targets: Mapping[str, np.ndarray],
+) -> dict[str, dict]:
+    """Lowest supported per-class accuracy for each attribute."""
+    class_metrics = per_class_accuracy(preds, targets)
+    out = {}
+    for a in ATTRIBUTES:
+        scores = np.asarray(class_metrics[a]["accuracy"], dtype=np.float64)
+        valid = ~np.isnan(scores)
+        if not valid.any():
+            out[a] = {"class": None, "accuracy": float("nan"), "support": 0}
+            continue
+        valid_indices = np.flatnonzero(valid)
+        class_index = int(valid_indices[np.argmin(scores[valid])])
+        out[a] = {
+            "class": CLASS_NAMES[a][class_index],
+            "accuracy": float(scores[class_index]),
+            "support": class_metrics[a]["support"][class_index],
+        }
+    return out
+
+
 def confusion_matrices(
     preds: Mapping[str, np.ndarray],
     targets: Mapping[str, np.ndarray],
@@ -116,6 +175,49 @@ def per_class_prf(
             "support": sup.tolist(),
         }
     return out
+
+
+def evaluation_report(
+    preds: Mapping[str, np.ndarray],
+    probs: Mapping[str, np.ndarray],
+    targets: Mapping[str, np.ndarray],
+) -> dict:
+    """Build every metric required by the assignment report."""
+    per_map = per_attribute_mAP(probs, targets)
+    return {
+        "avg_macro_f1": average_macro_f1(preds, targets),
+        "per_macro_f1": per_attribute_macro_f1(preds, targets),
+        "avg_map": float(np.mean(list(per_map.values()))),
+        "per_map": per_map,
+        "top1_accuracy": per_attribute_accuracy(preds, targets),
+        "worst_class_accuracy": worst_class_accuracy(preds, targets),
+        "per_class_accuracy": per_class_accuracy(preds, targets),
+        "per_class_prf": per_class_prf(preds, targets),
+        "confusion_matrices": confusion_matrices(preds, targets, normalize="true"),
+    }
+
+
+def print_evaluation_report(report: Mapping, title: str = "Evaluation") -> None:
+    """Print a compact notebook-friendly summary and per-class tables."""
+    print(f"\n{title}")
+    print(f"Avg-MF1={report['avg_macro_f1']:.5f}  Avg-mAP={report['avg_map']:.5f}")
+    for a in ATTRIBUTES:
+        worst = report["worst_class_accuracy"][a]
+        print(
+            f"{a}: MF1={report['per_macro_f1'][a]:.5f} "
+            f"mAP={report['per_map'][a]:.5f} "
+            f"Top-1={report['top1_accuracy'][a]:.5f} "
+            f"Worst={worst['class']}:{worst['accuracy']:.5f}"
+        )
+        prf = report["per_class_prf"][a]
+        class_acc = report["per_class_accuracy"][a]
+        print("  class | precision | recall | f1 | accuracy | support")
+        for index, class_name in enumerate(prf["class"]):
+            print(
+                f"  {class_name} | {prf['precision'][index]:.5f} | "
+                f"{prf['recall'][index]:.5f} | {prf['f1'][index]:.5f} | "
+                f"{class_acc['accuracy'][index]:.5f} | {prf['support'][index]}"
+            )
 
 
 @torch.no_grad()

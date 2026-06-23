@@ -31,6 +31,8 @@ class TrainConfig:
     grad_clip: float | None = 1.0
     log_every: int = 50
     amp: bool = True
+    checkpoint_path: str | None = None
+    checkpoint_metadata: dict = field(default_factory=dict)
 
 
 class MultiTaskTrainer:
@@ -50,12 +52,17 @@ class MultiTaskTrainer:
         self.loss_fns = loss_fns
         self.device = device
         self.cfg = config
-        self.scaler = torch.amp.GradScaler(enabled=config.amp)
+        self.scaler = torch.amp.GradScaler(
+            enabled=config.amp and device.type == "cuda"
+        )
         # No-op logger by default — calls are silently ignored.
         self.logger = logger if logger is not None else WandbLogger(project=None)
 
     def fit(self, train_loader: DataLoader, val_loader: DataLoader) -> dict:
         history = {"train_loss": [], "val_avg_mf1": [], "val_per_mf1": []}
+        best_score = float("-inf")
+        best_epoch = 0
+        best_state = None
 
         for epoch in range(self.cfg.epochs):
             train_loss = self._train_one_epoch(train_loader, epoch)
@@ -64,6 +71,25 @@ class MultiTaskTrainer:
             history["train_loss"].append(train_loss)
             history["val_avg_mf1"].append(val_metrics["avg_macro_f1"])
             history["val_per_mf1"].append(val_metrics["per_macro_f1"])
+
+            if val_metrics["avg_macro_f1"] > best_score:
+                best_score = val_metrics["avg_macro_f1"]
+                best_epoch = epoch + 1
+                best_state = {
+                    key: value.detach().cpu().clone()
+                    for key, value in self.model.state_dict().items()
+                }
+                if self.cfg.checkpoint_path is not None:
+                    torch.save(
+                        {
+                            "state_dict": best_state,
+                            "history": history,
+                            "best_val_avg_mf1": best_score,
+                            "best_epoch": best_epoch,
+                            **self.cfg.checkpoint_metadata,
+                        },
+                        self.cfg.checkpoint_path,
+                    )
 
             if self.scheduler is not None:
                 self.scheduler.step()
@@ -85,6 +111,14 @@ class MultiTaskTrainer:
                 log_payload[f"val/mf1_{a}"] = v
             self.logger.log(log_payload, step=epoch)
 
+        if best_state is not None:
+            self.model.load_state_dict(best_state)
+        history["best_val_avg_mf1"] = best_score
+        history["best_epoch"] = best_epoch
+        print(
+            "Restored best validation checkpoint: "
+            f"epoch {best_epoch}, Avg-MF1={best_score:.4f}"
+        )
         return history
 
     def _train_one_epoch(self, loader: DataLoader, epoch: int) -> float:
@@ -98,7 +132,10 @@ class MultiTaskTrainer:
             y = {a: batch[a].to(self.device, non_blocking=True) for a in ATTRIBUTES}
 
             self.optimizer.zero_grad(set_to_none=True)
-            with torch.amp.autocast(device_type="cuda", enabled=self.cfg.amp):
+            with torch.amp.autocast(
+                device_type=self.device.type,
+                enabled=self.cfg.amp and self.device.type == "cuda",
+            ):
                 logits = self.model(x)
                 loss = sum(
                     self.cfg.loss_weights[a] * self.loss_fns[a](logits[a], y[a])

@@ -120,6 +120,46 @@ class WandbLogger:
         import wandb
         self.run.log({name: wandb.Table(columns=columns, data=rows)})
 
+    def log_evaluation(self, prefix: str, report: Mapping[str, Any]) -> None:
+        """Log the complete metric bundle required by the assignment."""
+        scalar_metrics = {
+            f"{prefix}/avg_macro_f1": report["avg_macro_f1"],
+            f"{prefix}/avg_map": report["avg_map"],
+        }
+        for attr in report["per_macro_f1"]:
+            scalar_metrics.update({
+                f"{prefix}/mf1_{attr}": report["per_macro_f1"][attr],
+                f"{prefix}/map_{attr}": report["per_map"][attr],
+                f"{prefix}/top1_{attr}": report["top1_accuracy"][attr],
+                f"{prefix}/worst_class_accuracy_{attr}": (
+                    report["worst_class_accuracy"][attr]["accuracy"]
+                ),
+            })
+        self.log(scalar_metrics)
+
+        for attr, cm in report["confusion_matrices"].items():
+            prf = report["per_class_prf"][attr]
+            class_acc = report["per_class_accuracy"][attr]
+            self.log_confusion_matrix(
+                f"{prefix}/cm_{attr}", cm, list(prf["class"])
+            )
+            rows = [
+                [
+                    class_name,
+                    prf["precision"][index],
+                    prf["recall"][index],
+                    prf["f1"][index],
+                    class_acc["accuracy"][index],
+                    prf["support"][index],
+                ]
+                for index, class_name in enumerate(prf["class"])
+            ]
+            self.log_table(
+                f"{prefix}/per_class_{attr}",
+                ["class", "precision", "recall", "f1", "accuracy", "support"],
+                rows,
+            )
+
     # --- Lifecycle ----------------------------------------------------------------
 
     def finish(self) -> None:

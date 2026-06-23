@@ -7,8 +7,6 @@ from pathlib import Path
 import numpy as np
 
 from src.datasets.bdd_attr import (
-    SCENE_CLASSES,
-    TIMEOFDAY_CLASSES,
     WEATHER_CLASSES,
 )
 
@@ -18,10 +16,10 @@ def write_submission(
     image_ids: list[str],
     preds: dict[str, np.ndarray],
 ) -> None:
-    """Submission format:
+    """Kaggle submission format:
 
-        image_id, weather, scene, timeofday
-        b1c66a42-6f7d68ca, clear, city street, daytime
+        image_id, weather
+        b1c66a42-6f7d68ca, clear
         ...
     """
     out_path = Path(out_path)
@@ -29,11 +27,9 @@ def write_submission(
 
     with out_path.open("w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["image_id", "weather", "scene", "timeofday"])
+        w.writerow(["image_id", "weather"])
         for i, image_id in enumerate(image_ids):
             w.writerow([
                 image_id,
                 WEATHER_CLASSES[int(preds["weather"][i])],
-                SCENE_CLASSES[int(preds["scene"][i])],
-                TIMEOFDAY_CLASSES[int(preds["timeofday"][i])],
             ])
